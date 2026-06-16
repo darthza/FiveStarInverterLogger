@@ -8,17 +8,20 @@
 namespace {
 constexpr uint32_t DebugBaud = 115200;
 constexpr uint32_t InverterBaud = 2400;
-constexpr uint32_t PollIntervalMs = 5000;
+constexpr uint32_t PollIntervalMs = 15000;
+constexpr uint32_t StatusIntervalMs = 30000;
 constexpr uint32_t CommandTimeoutMs = 1500;
 constexpr uint32_t MqttReconnectIntervalMs = 10000;
-constexpr const char *FirmwareVersion = "0.1.2";
+constexpr const char *FirmwareVersion = "0.2.7";
 
 WiFiClient wifiClient;
 PubSubClient mqtt(wifiClient);
 
 uint32_t lastPollMs = 0;
 uint32_t pollCount = 0;
+uint32_t lastStatusMs = 0;
 uint32_t lastMqttConnectAttemptMs = 0;
+uint32_t inverterTimeoutCount = 0;
 
 struct Q1Snapshot {
   bool valid = false;
@@ -33,41 +36,53 @@ struct Q1Snapshot {
   String raw;
 };
 
-void publishText(const char *suffix, const String &value) {
+void publishText(const char *suffix, const String &value, bool retained = true) {
 #if MQTT_ENABLED
   if (!mqtt.connected()) {
     return;
   }
 
   String topic = String(MQTT_TOPIC_PREFIX) + "/" + suffix;
-  mqtt.publish(topic.c_str(), value.c_str(), true);
+  mqtt.publish(topic.c_str(), value.c_str(), retained);
 #else
   (void)suffix;
   (void)value;
+  (void)retained;
 #endif
 }
 
 void publishNumber(const char *suffix, float value, uint8_t decimals = 1) {
-  if (isnan(value)) {
-    return;
+  if (!isnan(value)) {
+    publishText(suffix, String(value, decimals));
   }
-
-  publishText(suffix, String(value, decimals));
 }
 
 void publishInteger(const char *suffix, int value) {
-  if (value < 0) {
-    return;
+  if (value >= 0) {
+    publishText(suffix, String(value));
   }
+}
 
-  publishText(suffix, String(value));
+void publishStatus() {
+  publishText("status/version", FirmwareVersion);
+  publishText("status/ip", WiFi.localIP().toString());
+  publishText("status/rssi", String(WiFi.RSSI()));
+  publishText("status/uptime_ms", String(millis()), false);
+  publishText("status/free_heap", String(ESP.getFreeHeap()), false);
+  publishText("status/inverter_timeouts", String(inverterTimeoutCount), false);
 }
 
 String readLineFromInverter(uint32_t timeoutMs) {
   String response;
+  response.reserve(96);
   uint32_t started = millis();
 
   while (millis() - started < timeoutMs) {
+    ArduinoOTA.handle();
+#if MQTT_ENABLED
+    mqtt.loop();
+#endif
+
     while (Serial.available() > 0) {
       char c = static_cast<char>(Serial.read());
 
@@ -98,6 +113,12 @@ String sendCommand(const char *command) {
   Serial.print('\r');
 
   String response = readLineFromInverter(CommandTimeoutMs);
+  if (response.length() == 0) {
+    inverterTimeoutCount++;
+    publishText("status/last_timeout_command", command, false);
+    publishText("status/inverter_timeouts", String(inverterTimeoutCount), false);
+  }
+
   Serial1.print(F("cmd "));
   Serial1.print(command);
   Serial1.print(F(" -> "));
@@ -159,6 +180,8 @@ void publishSnapshot(const Q1Snapshot &snapshot) {
 void connectWifi() {
   WiFi.mode(WIFI_STA);
   WiFi.hostname(OTA_HOSTNAME);
+  WiFi.setSleepMode(WIFI_NONE_SLEEP);
+  WiFi.setOutputPower(10.5f);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
 
   Serial1.print(F("Connecting WiFi"));
@@ -194,6 +217,7 @@ void setupOta() {
 void connectMqtt() {
 #if MQTT_ENABLED
   mqtt.setServer(MQTT_HOST, MQTT_PORT);
+  mqtt.setBufferSize(256);
 
   if (mqtt.connected()) {
     return;
@@ -215,6 +239,9 @@ void connectMqtt() {
   }
 
   Serial1.println(connected ? F("MQTT connected") : F("MQTT connect failed"));
+  if (connected) {
+    publishStatus();
+  }
 #endif
 }
 
@@ -222,15 +249,27 @@ void pollInverter() {
   pollCount++;
 
   if (pollCount == 1) {
-    publishText("raw/q", sendCommand("Q"));
-    publishText("raw/f", sendCommand("F"));
-    publishText("raw/i", sendCommand("I"));
+    String rawQ = sendCommand("Q");
+    if (rawQ.length() > 0) {
+      publishText("raw/q", rawQ);
+    }
+
+    String rawF = sendCommand("F");
+    if (rawF.length() > 0) {
+      publishText("raw/f", rawF);
+    }
+
+    String rawI = sendCommand("I");
+    if (rawI.length() > 0) {
+      publishText("raw/i", rawI);
+    }
   }
 
   String rawQ1 = sendCommand("Q1");
   Q1Snapshot snapshot;
   if (parseQ1(rawQ1, snapshot)) {
     publishSnapshot(snapshot);
+    publishText("status/last_poll", String(millis()), false);
     Serial1.print(F("battery="));
     Serial1.print(snapshot.batteryVoltage, 1);
     Serial1.print(F("V output="));
@@ -239,7 +278,7 @@ void pollInverter() {
     Serial1.print(snapshot.loadPercent);
     Serial1.println(F("%"));
   } else {
-    publishText("raw/q1_parse_error", rawQ1);
+    publishText("raw/q1_parse_error", rawQ1.length() > 0 ? rawQ1 : String("<timeout>"), false);
     Serial1.println(F("Q1 parse failed"));
   }
 }
@@ -270,6 +309,11 @@ void loop() {
 #endif
 
   uint32_t now = millis();
+  if (now - lastStatusMs >= StatusIntervalMs) {
+    lastStatusMs = now;
+    publishStatus();
+  }
+
   if (now - lastPollMs >= PollIntervalMs) {
     lastPollMs = now;
     pollInverter();

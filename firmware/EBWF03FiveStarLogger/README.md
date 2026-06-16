@@ -10,7 +10,7 @@ Custom ESP8266 firmware for replacing the SmartESS/DessMonitor firmware on an EB
 - UART settings: `2400 8N1`
 - Known commands: `Q`, `Q1`, `F`, `I`
 - OTA: enabled using ArduinoOTA
-- MQTT: present but disabled by default
+- MQTT: optional, enabled in `include/config.h`
 
 ## Safety
 
@@ -66,10 +66,32 @@ pio run -t upload --upload-port /dev/cu.usbserial-0001
 After the first successful flash and WiFi join:
 
 ```bash
-pio run -t upload --upload-port fivestar-inverter.local
+FIVESTAR_OTA_PASSWORD='your-ota-password' pio run -e eb_wf03_01_ota -t upload
 ```
 
 If OTA fails because the firmware cannot boot or cannot join WiFi, use serial flashing again.
+
+## MQTT Diagnostics
+
+When MQTT is enabled, the firmware publishes retained inverter values and
+non-retained status/diagnostic values under `MQTT_TOPIC_PREFIX`.
+
+Useful topics:
+
+```text
+status/version
+status/ip
+status/rssi
+status/uptime_ms
+status/free_heap
+status/inverter_timeouts
+status/last_timeout_command
+raw/q1_parse_error
+```
+
+If `status/uptime_ms` keeps increasing and `free_heap` is steady, the ESP is
+not reboot-looping. If `status/inverter_timeouts` increases, the ESP is alive
+but the inverter UART is not replying on the configured pins/baud/path.
 
 ## UART Pins
 
@@ -92,4 +114,3 @@ If needed, restore the original SmartESS firmware with esptool:
 ```bash
 python -m esptool --port /dev/cu.usbserial-0001 --baud 115200 write-flash 0x000000 work/firmware/eb-wf03-01-esp8266-backup.bin
 ```
-

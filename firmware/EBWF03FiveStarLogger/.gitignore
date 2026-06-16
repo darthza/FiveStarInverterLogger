@@ -1,7 +1,7 @@
 .pio/
+.platformio-home/
 .vscode/
 include/config.h
 *.bin
 *.elf
 *.map
-

@@ -10,12 +10,15 @@ constexpr uint32_t DebugBaud = 115200;
 constexpr uint32_t InverterBaud = 2400;
 constexpr uint32_t PollIntervalMs = 5000;
 constexpr uint32_t CommandTimeoutMs = 1500;
+constexpr uint32_t MqttReconnectIntervalMs = 10000;
+constexpr const char *FirmwareVersion = "0.1.2";
 
 WiFiClient wifiClient;
 PubSubClient mqtt(wifiClient);
 
 uint32_t lastPollMs = 0;
 uint32_t pollCount = 0;
+uint32_t lastMqttConnectAttemptMs = 0;
 
 struct Q1Snapshot {
   bool valid = false;
@@ -196,6 +199,12 @@ void connectMqtt() {
     return;
   }
 
+  uint32_t now = millis();
+  if (now - lastMqttConnectAttemptMs < MqttReconnectIntervalMs) {
+    return;
+  }
+  lastMqttConnectAttemptMs = now;
+
   String clientId = String(OTA_HOSTNAME) + "-" + String(ESP.getChipId(), HEX);
   bool connected = false;
 
@@ -239,7 +248,8 @@ void pollInverter() {
 void setup() {
   Serial1.begin(DebugBaud);
   Serial1.println();
-  Serial1.println(F("FiveStar EB-WF03-01 logger booting"));
+  Serial1.print(F("FiveStar EB-WF03-01 logger booting v"));
+  Serial1.println(FirmwareVersion);
 
   Serial.begin(InverterBaud, SERIAL_8N1);
   Serial.setTimeout(CommandTimeoutMs);

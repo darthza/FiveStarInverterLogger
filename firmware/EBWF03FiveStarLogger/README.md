@@ -44,7 +44,8 @@ Edit `include/config.h`:
 Install PlatformIO, then:
 
 ```bash
-pio run
+pio run -e eb_wf03_01
+pio run -e eb_wf03_01_recovery
 ```
 
 ## First Serial Flash
@@ -70,6 +71,27 @@ FIVESTAR_OTA_PASSWORD='your-ota-password' pio run -e eb_wf03_01_ota -t upload
 ```
 
 If OTA fails because the firmware cannot boot or cannot join WiFi, use serial flashing again.
+
+## Recovery Firmware
+
+The recovery build is a small WiFi + ArduinoOTA image with no MQTT and no
+inverter polling:
+
+```bash
+pio run -e eb_wf03_01_recovery
+FIVESTAR_OTA_PASSWORD='your-ota-password' pio run -e eb_wf03_01_recovery_ota -t upload
+```
+
+Use recovery whenever the logger is unstable. After recovery is stable and OTA
+is reachable again, flash the normal logger build.
+
+The normal logger deliberately waits before polling the inverter. This leaves a
+usable OTA window after boot if a new logger build is bad.
+
+ESP8266 Arduino builds generally do not use C++ exceptions as a safety net.
+Watchdog resets, brownouts, blocked network calls, and invalid memory access are
+handled by firmware structure instead: short timeouts, frequent `yield()` /
+`ArduinoOTA.handle()`, staged startup, reset telemetry, and the recovery image.
 
 ## MQTT Diagnostics
 

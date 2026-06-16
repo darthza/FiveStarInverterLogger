@@ -144,6 +144,28 @@ sudo systemctl enable --now fivestar-inverter-logger
 sudo journalctl -u fivestar-inverter-logger -f
 ```
 
+## EB-WF03-01 Custom Firmware
+
+This repo also includes experimental Arduino/PlatformIO firmware for replacing
+the SmartESS firmware on the EB-WF03-01 WiFi module:
+
+```text
+firmware/EBWF03FiveStarLogger
+```
+
+The firmware currently provides:
+
+- ESP8266 WiFi connection
+- ArduinoOTA updates after the first serial flash
+- `2400 8N1` inverter UART polling
+- raw `Q`, `Q1`, `F`, and `I` command support
+- parsed `Q1` fields
+- optional MQTT publishing, disabled by default
+
+Before flashing, keep the verified factory firmware backup safe. See
+`firmware/EBWF03FiveStarLogger/README.md` and
+`firmware/EBWF03FiveStarLogger/docs/bring-up.md`.
+
 ## SmartHome Payload
 
 The worker `POST`s JSON to `SmartHome:EndpointUrl` when enabled. The request includes `X-Api-Key` if `SmartHome:ApiKey` is set.

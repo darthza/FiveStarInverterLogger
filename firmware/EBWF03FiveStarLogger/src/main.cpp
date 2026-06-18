@@ -2,6 +2,30 @@
 #include <ArduinoOTA.h>
 #include <ESP8266WiFi.h>
 
+#ifndef FIVESTAR_CONNECTED_DIAGNOSTIC
+#define FIVESTAR_CONNECTED_DIAGNOSTIC 0
+#endif
+
+#ifndef FIVESTAR_PIN_DIAGNOSTIC
+#define FIVESTAR_PIN_DIAGNOSTIC 0
+#endif
+
+#ifndef FIVESTAR_SERIAL_DEBUG
+#define FIVESTAR_SERIAL_DEBUG 1
+#endif
+
+#ifndef FIVESTAR_LOW_POWER
+#define FIVESTAR_LOW_POWER 0
+#endif
+
+#ifndef FIVESTAR_ULTRA_LOW_POWER
+#define FIVESTAR_ULTRA_LOW_POWER 0
+#endif
+
+#ifndef FIVESTAR_FAST_POWER_MONITOR
+#define FIVESTAR_FAST_POWER_MONITOR 0
+#endif
+
 #if !FIVESTAR_RECOVERY_ONLY
 #include <PubSubClient.h>
 #endif
@@ -10,71 +34,147 @@
 
 namespace {
 constexpr uint32_t DebugBaud = 115200;
+#if FIVESTAR_PIN_DIAGNOSTIC
+constexpr uint32_t WifiConnectTimeoutMs = 12000;
+#else
 constexpr uint32_t WifiConnectTimeoutMs = 20000;
+#endif
 constexpr uint32_t OtaWarmupMs = 60000;
 constexpr uint32_t HeartbeatIntervalMs = 5000;
 constexpr uint32_t StatusIntervalMs = 30000;
+#if FIVESTAR_ULTRA_LOW_POWER
+constexpr float WifiOutputPowerDbm = -1.0f;
+#elif FIVESTAR_LOW_POWER
+constexpr float WifiOutputPowerDbm = 0.0f;
+#else
 constexpr float WifiOutputPowerDbm = 10.5f;
+#endif
 
 #if FIVESTAR_RECOVERY_ONLY
 constexpr const char *FirmwareVersion = "recovery-0.4.0";
+#elif FIVESTAR_PIN_DIAGNOSTIC && FIVESTAR_ULTRA_LOW_POWER
+constexpr const char *FirmwareVersion = "pin-diag-ultra-low-power-0.1.0";
+#elif FIVESTAR_PIN_DIAGNOSTIC && FIVESTAR_LOW_POWER
+constexpr const char *FirmwareVersion = "pin-diag-low-power-0.1.0";
+#elif FIVESTAR_PIN_DIAGNOSTIC
+constexpr const char *FirmwareVersion = "pin-diag-0.1.0";
+#elif FIVESTAR_CONNECTED_DIAGNOSTIC
+constexpr const char *FirmwareVersion = "connected-diag-0.1.0";
+#elif FIVESTAR_FAST_POWER_MONITOR
+constexpr const char *FirmwareVersion = "fast-power-monitor-0.1.0";
 #else
+#endif
+
+#if !FIVESTAR_RECOVERY_ONLY && !FIVESTAR_PIN_DIAGNOSTIC && !FIVESTAR_CONNECTED_DIAGNOSTIC
 constexpr uint32_t InverterBaud = 2400;
-constexpr uint32_t FirstPollDelayMs = 65000;
+#if FIVESTAR_FAST_POWER_MONITOR
+constexpr uint32_t FirstPollDelayMs = 0;
+constexpr uint32_t PollIntervalMs = 5000;
+constexpr uint32_t CommandTimeoutMs = 1200;
+#else
+constexpr uint32_t FirstPollDelayMs = 5000;
 constexpr uint32_t PollIntervalMs = 30000;
 constexpr uint32_t CommandTimeoutMs = 1500;
+#endif
+#endif
+
+#if !FIVESTAR_RECOVERY_ONLY
+#if FIVESTAR_PIN_DIAGNOSTIC || FIVESTAR_FAST_POWER_MONITOR
+constexpr uint32_t MqttReconnectIntervalMs = 1000;
+#else
 constexpr uint32_t MqttReconnectIntervalMs = 10000;
+#endif
+#if !FIVESTAR_CONNECTED_DIAGNOSTIC && !FIVESTAR_PIN_DIAGNOSTIC && !FIVESTAR_FAST_POWER_MONITOR
 constexpr const char *FirmwareVersion = "0.3.0";
+#endif
 
 WiFiClient wifiClient;
 PubSubClient mqtt(wifiClient);
 
+#if !FIVESTAR_CONNECTED_DIAGNOSTIC && !FIVESTAR_PIN_DIAGNOSTIC
 uint32_t nextPollMs = FirstPollDelayMs;
-uint32_t lastMqttConnectAttemptMs = 0;
 uint32_t inverterTimeoutCount = 0;
 uint32_t successfulPollCount = 0;
+#endif
+uint32_t lastMqttConnectAttemptMs = 0;
 #endif
 
 uint32_t lastHeartbeatMs = 0;
 #if !FIVESTAR_RECOVERY_ONLY
 uint32_t lastStatusMs = 0;
 #endif
+#if FIVESTAR_PIN_DIAGNOSTIC
+#if FIVESTAR_ULTRA_LOW_POWER
+constexpr uint32_t PinSampleIntervalMs = 5000;
+constexpr uint32_t PinBurstIntervalMs = 1000;
+constexpr uint8_t PinBurstSamples = 1;
+#elif FIVESTAR_LOW_POWER
+constexpr uint32_t PinSampleIntervalMs = 2000;
+constexpr uint32_t PinBurstIntervalMs = 500;
+constexpr uint8_t PinBurstSamples = 6;
+#else
+constexpr uint32_t PinSampleIntervalMs = 500;
+constexpr uint32_t PinBurstIntervalMs = 200;
+constexpr uint8_t PinBurstSamples = 20;
+#endif
+uint32_t lastPinSampleMs = 0;
+String bootPinSnapshot;
+uint32_t pinSequence = 0;
+#endif
 bool wifiConnected = false;
 
 void debugPrintln(const __FlashStringHelper *message) {
+#if FIVESTAR_SERIAL_DEBUG
 #if FIVESTAR_RECOVERY_ONLY
   Serial.println(message);
 #else
   Serial1.println(message);
 #endif
+#else
+  (void)message;
+#endif
 }
 
 void debugPrint(const __FlashStringHelper *message) {
+#if FIVESTAR_SERIAL_DEBUG
 #if FIVESTAR_RECOVERY_ONLY
   Serial.print(message);
 #else
   Serial1.print(message);
 #endif
+#else
+  (void)message;
+#endif
 }
 
 void debugPrintlnString(const String &message) {
+#if FIVESTAR_SERIAL_DEBUG
 #if FIVESTAR_RECOVERY_ONLY
   Serial.println(message);
 #else
   Serial1.println(message);
 #endif
+#else
+  (void)message;
+#endif
 }
 
 void debugPrintlnNumber(int32_t value) {
+#if FIVESTAR_SERIAL_DEBUG
 #if FIVESTAR_RECOVERY_ONLY
   Serial.println(value);
 #else
   Serial1.println(value);
 #endif
+#else
+  (void)value;
+#endif
 }
 
 void serviceBackground() {
+#if !FIVESTAR_ULTRA_LOW_POWER
   ArduinoOTA.handle();
+#endif
 #if !FIVESTAR_RECOVERY_ONLY
 #if MQTT_ENABLED
   mqtt.loop();
@@ -94,7 +194,11 @@ void startFallbackAp() {
 bool connectWifi() {
   WiFi.mode(WIFI_STA);
   WiFi.hostname(OTA_HOSTNAME);
+#if FIVESTAR_LOW_POWER || FIVESTAR_ULTRA_LOW_POWER
+  WiFi.setSleepMode(WIFI_MODEM_SLEEP);
+#else
   WiFi.setSleepMode(WIFI_NONE_SLEEP);
+#endif
   WiFi.setOutputPower(WifiOutputPowerDbm);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
 
@@ -178,15 +282,77 @@ void publishInteger(const char *suffix, int value) {
   }
 }
 
+#if FIVESTAR_PIN_DIAGNOSTIC
+constexpr uint8_t MonitoredPins[] = {0, 1, 2, 3, 4, 5, 12, 13, 14, 15, 16};
+
+String readPinSnapshot() {
+  String snapshot;
+  snapshot.reserve(96);
+  for (uint8_t i = 0; i < sizeof(MonitoredPins); i++) {
+    uint8_t pin = MonitoredPins[i];
+    if (i > 0) {
+      snapshot += ' ';
+    }
+    snapshot += "GPIO";
+    snapshot += String(pin);
+    snapshot += '=';
+    snapshot += String(digitalRead(pin));
+  }
+  return snapshot;
+}
+
+void configurePinDiagnostics() {
+  for (uint8_t i = 0; i < sizeof(MonitoredPins); i++) {
+    pinMode(MonitoredPins[i], INPUT);
+  }
+  bootPinSnapshot = readPinSnapshot();
+}
+
+void publishPinDiagnostics(bool retained) {
+  String snapshot = readPinSnapshot();
+  publishText("diag/pins", snapshot, retained);
+  publishText("diag/boot_pins", bootPinSnapshot, true);
+  publishText("diag/sequence", String(pinSequence++), false);
+  publishText("diag/sample_ms", String(millis()), false);
+  publishText("diag/gpio0", String(digitalRead(0)), retained);
+  publishText("diag/gpio1_tx0", String(digitalRead(1)), retained);
+  publishText("diag/gpio2_tx1_boot", String(digitalRead(2)), retained);
+  publishText("diag/gpio3_rx0", String(digitalRead(3)), retained);
+  publishText("diag/gpio15_boot", String(digitalRead(15)), retained);
+}
+
+void publishPinBurst() {
+  for (uint8_t i = 0; i < PinBurstSamples; i++) {
+    serviceBackground();
+    publishPinDiagnostics(i == 0);
+    delay(PinBurstIntervalMs);
+  }
+}
+#endif
+
 void publishStatus() {
   publishText("status/version", FirmwareVersion);
+#if FIVESTAR_PIN_DIAGNOSTIC
+  publishText("status/mode", "pin-diagnostic");
+#elif FIVESTAR_CONNECTED_DIAGNOSTIC
+  publishText("status/mode", "connected-diagnostic");
+#else
+  publishText("status/mode", "logger");
+#endif
   publishText("status/reset_reason", ESP.getResetReason());
   publishText("status/ip", WiFi.localIP().toString());
   publishText("status/rssi", String(WiFi.RSSI()));
   publishText("status/uptime_ms", String(millis()), false);
   publishText("status/free_heap", String(ESP.getFreeHeap()), false);
+#if !FIVESTAR_CONNECTED_DIAGNOSTIC && !FIVESTAR_PIN_DIAGNOSTIC
   publishText("status/inverter_timeouts", String(inverterTimeoutCount), false);
   publishText("status/successful_polls", String(successfulPollCount), false);
+#else
+  publishText("status/inverter_uart", "disabled", false);
+#endif
+#if FIVESTAR_PIN_DIAGNOSTIC
+  publishPinDiagnostics(false);
+#endif
 }
 
 void connectMqtt() {
@@ -203,7 +369,7 @@ void connectMqtt() {
   }
 
   uint32_t now = millis();
-  if (now - lastMqttConnectAttemptMs < MqttReconnectIntervalMs) {
+  if (lastMqttConnectAttemptMs != 0 && now - lastMqttConnectAttemptMs < MqttReconnectIntervalMs) {
     return;
   }
   lastMqttConnectAttemptMs = now;
@@ -216,10 +382,14 @@ void connectMqtt() {
   debugPrintln(connected ? F("MQTT connected") : F("MQTT connect failed"));
   if (connected) {
     publishStatus();
+#if FIVESTAR_PIN_DIAGNOSTIC
+    publishPinBurst();
+#endif
   }
 #endif
 }
 
+#if !FIVESTAR_CONNECTED_DIAGNOSTIC && !FIVESTAR_PIN_DIAGNOSTIC
 String readLineFromInverter(uint32_t timeoutMs) {
   String response;
   response.reserve(96);
@@ -315,6 +485,7 @@ void publishSnapshot(const Q1Snapshot &snapshot) {
 void pollInverter() {
   publishText("status/poll_started_ms", String(millis()), false);
   String rawQ1 = sendCommand("Q1");
+  publishText("raw/q1", rawQ1.length() > 0 ? rawQ1 : String("<timeout>"), false);
   Q1Snapshot snapshot;
   if (parseQ1(rawQ1, snapshot)) {
     successfulPollCount++;
@@ -324,7 +495,14 @@ void pollInverter() {
   } else {
     publishText("raw/q1_parse_error", rawQ1.length() > 0 ? rawQ1 : String("<timeout>"), false);
   }
+#if FIVESTAR_FAST_POWER_MONITOR
+  String rawF = sendCommand("F");
+  publishText("raw/f", rawF.length() > 0 ? rawF : String("<timeout>"), false);
+  String rawI = sendCommand("I");
+  publishText("raw/i", rawI.length() > 0 ? rawI : String("<timeout>"), false);
+#endif
 }
+#endif
 #endif
 } // namespace
 
@@ -332,9 +510,18 @@ void setup() {
 #if FIVESTAR_RECOVERY_ONLY
   Serial.begin(DebugBaud);
 #else
+#if FIVESTAR_SERIAL_DEBUG
   Serial1.begin(DebugBaud);
+#endif
+#if FIVESTAR_PIN_DIAGNOSTIC
+  configurePinDiagnostics();
+#elif !FIVESTAR_CONNECTED_DIAGNOSTIC
   Serial.begin(InverterBaud, SERIAL_8N1);
   Serial.setTimeout(CommandTimeoutMs);
+#else
+  pinMode(1, INPUT);
+  pinMode(3, INPUT);
+#endif
 #endif
 
   debugPrint(F("FiveStar firmware "));
@@ -343,11 +530,16 @@ void setup() {
   debugPrintlnString(ESP.getResetReason());
 
   connectWifi();
+#if !FIVESTAR_ULTRA_LOW_POWER
   setupOta();
+#endif
 
 #if !FIVESTAR_RECOVERY_ONLY
   connectMqtt();
   debugPrintln(F("OTA warmup before inverter polling"));
+#if FIVESTAR_PIN_DIAGNOSTIC
+  publishPinBurst();
+#endif
 #endif
 }
 
@@ -376,9 +568,16 @@ void loop() {
     publishStatus();
   }
 
+#if FIVESTAR_PIN_DIAGNOSTIC
+  if (now - lastPinSampleMs >= PinSampleIntervalMs) {
+    lastPinSampleMs = now;
+    publishPinDiagnostics(false);
+  }
+#elif !FIVESTAR_CONNECTED_DIAGNOSTIC
   if (static_cast<int32_t>(now - nextPollMs) >= 0) {
     nextPollMs = now + PollIntervalMs;
     pollInverter();
   }
+#endif
 #endif
 }
